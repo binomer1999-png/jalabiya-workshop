@@ -1,0 +1,714 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>مشغل الجلابية — نظام تتبع الطلبات</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Lalezar&family=Tajawal:wght@300;400;500;700;800;900&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          ink: { DEFAULT:'#1B2A41',50:'#EEF1F5',100:'#D6DCE6',200:'#AEB9CC',300:'#8696B3',400:'#5E7399',500:'#3C4F70',600:'#1B2A41',700:'#152135',800:'#101828',900:'#0A0F1A' },
+          sand: { DEFAULT:'#EFE6D3',50:'#FBF8F1',100:'#F5EFDE',200:'#EFE6D3',300:'#E2D3B3',400:'#D2BC8B' },
+          cotton: '#FCFAF5',
+          brass: { DEFAULT:'#B08549', light:'#CDA36C', dark:'#8C6835' },
+          clay: '#A8503B',
+          palm: '#3F7A5D',
+          thread: { gold: '#C9A24B' },
+        },
+        fontFamily: {
+          display: ['"Lalezar"', '"Tajawal"', 'sans-serif'],
+          body: ['"Tajawal"', '"Inter"', 'sans-serif'],
+          ui: ['"IBM Plex Sans Arabic"', '"Tajawal"', 'sans-serif'],
+        },
+        boxShadow: {
+          soft: '0 2px 12px rgba(27,42,65,.08)',
+          card: '0 4px 20px rgba(27,42,65,.10)',
+          lift: '0 8px 30px rgba(27,42,65,.16)',
+        },
+      }
+    }
+  }
+</script>
+<style type="text/tailwindcss">
+  @layer components {
+    .card { @apply bg-cotton rounded-2xl shadow-soft border border-sand-300/60; }
+    .btn-primary { @apply inline-flex items-center justify-center gap-2 rounded-xl bg-ink-600 text-cotton font-ui font-semibold px-5 py-2.5 shadow-soft transition-all duration-150 hover:bg-ink-700 active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none; }
+    .btn-secondary { @apply inline-flex items-center justify-center gap-2 rounded-xl bg-sand-200 text-ink-700 font-ui font-semibold px-5 py-2.5 transition-all duration-150 hover:bg-sand-300 active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none; }
+    .btn-brass { @apply inline-flex items-center justify-center gap-2 rounded-xl bg-brass text-cotton font-ui font-semibold px-5 py-2.5 shadow-soft transition-all duration-150 hover:bg-brass-dark active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none; }
+    .input-field { @apply w-full rounded-xl border border-sand-300 bg-cotton px-4 py-2.5 font-ui text-ink-700 placeholder:text-ink-300 focus:border-brass focus:ring-2 focus:ring-brass/20 transition-colors outline-none; }
+    .label-field { @apply block font-ui text-sm font-medium text-ink-500 mb-1.5; }
+    .chip { @apply px-3.5 py-1.5 rounded-full text-sm font-ui font-semibold transition-colors bg-sand-200 text-ink-500; }
+    .chip-active { @apply bg-ink-600 text-cotton; }
+  }
+  .stitch-done { background-image: repeating-linear-gradient(to left,#3F7A5D 0,#3F7A5D 7px,transparent 7px,transparent 14px); background-size:100% 2px; background-repeat:no-repeat; background-position:center; }
+  .stitch-todo { background-image: repeating-linear-gradient(to left,#E2D3B3 0,#E2D3B3 7px,transparent 7px,transparent 14px); background-size:100% 2px; background-repeat:no-repeat; background-position:center; }
+  @keyframes pulse-ring { 0% { box-shadow:0 0 0 0 rgba(176,133,73,.45);} 100% { box-shadow:0 0 0 12px rgba(176,133,73,0);} }
+  .pulse-live { animation: pulse-ring 1.8s cubic-bezier(.4,0,.6,1) infinite; }
+  body { font-family:'Tajawal',sans-serif; }
+</style>
+</head>
+<body class="bg-sand-100 text-ink-700 antialiased min-h-screen">
+<div id="app"></div>
+
+<script type="module">
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4'
+
+const SUPABASE_URL = 'https://mcwfudcpomyzsvkmnsyd.supabase.co'
+const SUPABASE_ANON_KEY = 'sb_publishable_JeXlW51qmX0s0r_MF0sHzQ_K6K0qMHU'
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+
+const STATUS_ORDER = ['new','received','cutting','sewing','finished_sewing','buttons_in_progress','buttons_finished','ready_for_pickup','delivered']
+
+const STATUS_META = {
+  new:                 { label:'طلب جديد',           short:'جديد',        color:'bg-ink-200 text-ink-700' },
+  received:            { label:'تم الاستلام',         short:'استلام',      color:'bg-brass/15 text-brass-dark' },
+  cutting:             { label:'قص القماش',           short:'قص',          color:'bg-brass/25 text-brass-dark' },
+  sewing:              { label:'قيد الخياطة',         short:'خياطة',       color:'bg-brass/35 text-brass-dark' },
+  finished_sewing:     { label:'انتهت الخياطة',       short:'خياطة تمت',   color:'bg-palm/15 text-palm' },
+  buttons_in_progress: { label:'الأزرار قيد التنفيذ', short:'أزرار',       color:'bg-thread-gold/25 text-brass-dark' },
+  buttons_finished:    { label:'انتهت الأزرار',       short:'أزرار تمت',   color:'bg-palm/20 text-palm' },
+  ready_for_pickup:    { label:'جاهز للاستلام',       short:'جاهز',        color:'bg-palm/30 text-palm' },
+  delivered:           { label:'تم التسليم',          short:'تم التسليم', color:'bg-ink-600 text-cotton' },
+}
+
+const TRANSITIONS = {
+  new:                 { workshop:['received'] },
+  received:            { workshop:['cutting'] },
+  cutting:             { workshop:['sewing'] },
+  sewing:              { workshop:['finished_sewing'] },
+  finished_sewing:     { buttons:['buttons_in_progress'] },
+  buttons_in_progress: { buttons:['buttons_finished'] },
+  buttons_finished:    { buttons:['ready_for_pickup'] },
+  ready_for_pickup:    { shop:['delivered'], delivery:['delivered'] },
+}
+
+function nextAllowed(status, role) {
+  if (role === 'admin') {
+    const i = STATUS_ORDER.indexOf(status)
+    return STATUS_ORDER.slice(i + 1)
+  }
+  return (TRANSITIONS[status] && TRANSITIONS[status][role]) || []
+}
+
+const NOTE_FIELD_BY_ROLE = { workshop: 'workshop_notes', buttons: 'buttons_notes' }
+
+const ROLE_LABELS = { admin:'الإدارة', shop:'المحل (الاستقبال)', workshop:'المشغل (الخياطين)', buttons:'قسم الأزرار', delivery:'التسليم' }
+
+const DEPT_VIEW = {
+  shop: STATUS_ORDER,
+  workshop: ['new','received','cutting','sewing','finished_sewing'],
+  buttons: ['finished_sewing','buttons_in_progress','buttons_finished'],
+  delivery: ['ready_for_pickup','delivered'],
+  admin: STATUS_ORDER,
+}
+
+const MEASUREMENT_FIELDS = [
+  ['length','الطول (سم)'], ['shoulder','الكتف (سم)'], ['chest','الصدر (سم)'],
+  ['waist','الوسط (سم)'], ['sleeve','الكم (سم)'], ['neck','الرقبة (سم)'], ['collar','الياقة (سم)'],
+]
+
+const state = {
+  session: null,
+  profile: null,
+  orders: [],
+  profiles: [],
+  search: '',
+  filter: 'all',
+  selectedOrder: null,
+  showOrderForm: false,
+  notifications: [],
+  notifOpen: false,
+  ordersChannel: null,
+  notifChannel: null,
+}
+
+const app = document.getElementById('app')
+const esc = (s) => (s == null ? '' : String(s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])))
+const money = (n) => Number(n || 0).toLocaleString('ar-EG')
+const dateAr = (d) => d ? new Date(d).toLocaleDateString('ar-EG') : '—'
+const dtAr = (d) => d ? new Date(d).toLocaleString('ar-EG') : '—'
+
+async function loadOrders() {
+  const { data } = await supabase.from('orders').select('*').order('created_at', { ascending: false })
+  state.orders = data || []
+}
+
+async function loadProfiles() {
+  const { data } = await supabase.from('profiles').select('*').order('created_at', { ascending: false })
+  state.profiles = data || []
+}
+
+async function loadNotifications() {
+  if (!state.profile) return
+  const { data } = await supabase.from('notifications').select('*').eq('target_role', state.profile.role).order('created_at', { ascending: false }).limit(20)
+  state.notifications = data || []
+}
+
+function subscribeRealtime() {
+  if (state.ordersChannel) supabase.removeChannel(state.ordersChannel)
+  if (state.notifChannel) supabase.removeChannel(state.notifChannel)
+
+  state.ordersChannel = supabase.channel('orders-live').on('postgres_changes', { event:'*', schema:'public', table:'orders' }, (payload) => {
+    if (payload.eventType === 'INSERT') {
+      if (!state.orders.some(o => o.id === payload.new.id)) state.orders.unshift(payload.new)
+    } else if (payload.eventType === 'UPDATE') {
+      state.orders = state.orders.map(o => o.id === payload.new.id ? payload.new : o)
+      if (state.selectedOrder && state.selectedOrder.id === payload.new.id) state.selectedOrder = payload.new
+    } else if (payload.eventType === 'DELETE') {
+      state.orders = state.orders.filter(o => o.id !== payload.old.id)
+    }
+    render()
+  }).subscribe()
+
+  state.notifChannel = supabase.channel('notif-live-' + state.profile.role).on('postgres_changes', { event:'INSERT', schema:'public', table:'notifications', filter:`target_role=eq.${state.profile.role}` }, (payload) => {
+    state.notifications.unshift(payload.new)
+    render()
+  }).subscribe()
+}
+
+async function init() {
+  const { data: { session } } = await supabase.auth.getSession()
+  state.session = session
+  if (session) await loadProfileAndData()
+  render()
+
+  supabase.auth.onAuthStateChange(async (_event, session) => {
+    state.session = session
+    if (session) { await loadProfileAndData() } else { state.profile = null }
+    render()
+  })
+}
+
+async function loadProfileAndData() {
+  const { data } = await supabase.from('profiles').select('*').eq('id', state.session.user.id).single()
+  state.profile = data
+  await Promise.all([loadOrders(), loadNotifications()])
+  if (state.profile && state.profile.role === 'admin') await loadProfiles()
+  subscribeRealtime()
+}
+
+async function signIn(email, password) {
+  const { error } = await supabase.auth.signInWithPassword({ email, password })
+  return error
+}
+
+async function signOut() {
+  await supabase.auth.signOut()
+  state.profile = null
+  state.orders = []
+  render()
+}
+
+function render() {
+  if (!state.session) { app.innerHTML = renderLogin(); attachLoginEvents(); return }
+  if (!state.profile) { app.innerHTML = fullscreenLoader(); return }
+  app.innerHTML = renderShell()
+  attachShellEvents()
+}
+
+function fullscreenLoader() {
+  return `<div class="min-h-screen flex items-center justify-center bg-sand-100"><div class="w-8 h-8 border-4 border-brass border-t-transparent rounded-full animate-spin"></div></div>`
+}
+
+function renderLogin() {
+  return `
+  <div class="min-h-screen bg-ink-700 flex items-center justify-center p-4 relative overflow-hidden" dir="rtl">
+    <div class="absolute inset-0 opacity-[0.06] pointer-events-none" style="background-image:repeating-linear-gradient(45deg,transparent,transparent 18px,#C9A24B 18px,#C9A24B 20px)"></div>
+    <div class="relative w-full max-w-sm">
+      <div class="flex flex-col items-center mb-8">
+        <div class="w-14 h-14 rounded-2xl bg-brass/15 border border-brass/30 flex items-center justify-center mb-4 text-2xl">✂️</div>
+        <h1 class="font-display text-4xl text-cotton tracking-wide">مشغل الجلابية</h1>
+        <p class="text-ink-200 font-ui text-sm mt-1">نظام تتبع الطلبات المباشر</p>
+      </div>
+      <form id="login-form" class="bg-cotton rounded-2xl shadow-lift p-6 space-y-4">
+        <div id="login-error"></div>
+        <div>
+          <label class="label-field">البريد الإلكتروني</label>
+          <input type="email" required id="login-email" class="input-field" dir="ltr" placeholder="you@workshop.com" autocomplete="username" />
+        </div>
+        <div>
+          <label class="label-field">كلمة المرور</label>
+          <input type="password" required id="login-password" class="input-field" dir="ltr" placeholder="••••••••" autocomplete="current-password" />
+        </div>
+        <button type="submit" id="login-btn" class="btn-primary w-full mt-2">تسجيل الدخول</button>
+      </form>
+      <p class="text-center text-ink-300 text-xs font-ui mt-6">للحصول على حساب، تواصل مع إدارة المشغل</p>
+    </div>
+  </div>`
+}
+
+function attachLoginEvents() {
+  const form = document.getElementById('login-form')
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault()
+    const btn = document.getElementById('login-btn')
+    const errBox = document.getElementById('login-error')
+    errBox.innerHTML = ''
+    btn.disabled = true
+    btn.textContent = 'جاري الدخول...'
+    const email = document.getElementById('login-email').value.trim()
+    const password = document.getElementById('login-password').value
+    const error = await signIn(email, password)
+    btn.disabled = false
+    btn.textContent = 'تسجيل الدخول'
+    if (error) {
+      errBox.innerHTML = `<div class="bg-clay/10 border border-clay/30 text-clay rounded-xl px-4 py-3 text-sm font-ui text-center">البريد الإلكتروني أو كلمة المرور غير صحيحة</div>`
+    }
+  })
+}
+
+function renderShell() {
+  const role = state.profile.role
+  const unread = state.notifications.filter(n => !n.is_read).length
+  return `
+  <div class="min-h-screen bg-sand-100" dir="rtl">
+    <header class="sticky top-0 z-40 bg-cotton/95 backdrop-blur border-b border-sand-300 shadow-soft">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <div class="w-9 h-9 rounded-xl bg-ink-600 flex items-center justify-center shrink-0 text-brass-light">✂️</div>
+          <div class="hidden sm:block">
+            <p class="font-display text-xl leading-none text-ink-700 tracking-wide">مشغل الجلابية</p>
+            <p class="text-[11px] text-ink-300 font-ui">نظام تتبع الطلبات</p>
+          </div>
+        </div>
+        <div class="flex items-center gap-2 sm:gap-4">
+          <div class="hidden sm:flex items-center gap-1.5 text-xs font-ui text-palm bg-palm/10 rounded-full px-3 py-1.5">
+            <span class="w-2 h-2 rounded-full bg-palm pulse-live"></span> مباشر
+          </div>
+          <div class="relative">
+            <button id="notif-btn" class="relative w-10 h-10 flex items-center justify-center rounded-full hover:bg-sand-200">
+              🔔 ${unread > 0 ? '<span class="absolute top-1 left-1 w-2.5 h-2.5 bg-clay rounded-full ring-2 ring-cotton"></span>' : ''}
+            </button>
+            ${state.notifOpen ? renderNotifPanel() : ''}
+          </div>
+          <div class="hidden sm:flex flex-col items-end leading-tight">
+            <span class="text-sm font-ui font-semibold text-ink-700">${esc(state.profile.full_name)}</span>
+            <span class="text-[11px] text-ink-300 font-ui">${ROLE_LABELS[role]}</span>
+          </div>
+          <button id="signout-btn" class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-sand-200" title="تسجيل الخروج">🚪</button>
+        </div>
+      </div>
+    </header>
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+      ${renderDashboardBody(role)}
+    </main>
+  </div>
+  ${state.showOrderForm ? renderOrderForm() : ''}
+  ${state.selectedOrder ? renderOrderDetail(state.selectedOrder) : ''}
+  `
+}
+
+function renderNotifPanel() {
+  const items = state.notifications
+  return `
+  <div id="notif-panel" class="absolute left-0 mt-2 w-80 max-h-96 overflow-y-auto card z-50 py-2" dir="rtl">
+    <div class="px-4 py-2 font-ui font-bold text-ink-700 border-b border-sand-200">الإشعارات</div>
+    ${items.length === 0 ? '<div class="px-4 py-6 text-center text-sm text-ink-300 font-ui">لا توجد إشعارات بعد</div>' :
+      items.map(n => `<div class="px-4 py-3 border-b border-sand-100 last:border-0"><p class="text-sm font-ui text-ink-700">${esc(n.message)}</p><p class="text-[11px] text-ink-300 mt-1">${dtAr(n.created_at)}</p></div>`).join('')}
+  </div>`
+}
+
+function renderDashboardBody(role) {
+  const viewStatuses = DEPT_VIEW[role] || STATUS_ORDER
+  let list = state.orders.filter(o => viewStatuses.includes(o.status))
+  if (role !== 'shop' && role !== 'admin') {
+    list = [...list].sort((a,b) => new Date(a.created_at) - new Date(b.created_at))
+  }
+  if (state.filter !== 'all') list = list.filter(o => o.status === state.filter)
+  if (state.search.trim()) {
+    const q = state.search.trim().toLowerCase()
+    list = list.filter(o => (o.customer_name||'').toLowerCase().includes(q) || (o.customer_phone||'').includes(q) || (o.order_number||'').toLowerCase().includes(q))
+  }
+
+  const titles = { shop:['لوحة المحل','إنشاء الطلبات ومتابعة رحلة كل جلابية لحظة بلحظة'], workshop:['لوحة المشغل','متابعة القص والخياطة وإرسال الطلبات إلى قسم الأزرار'], buttons:['قسم الأزرار','الطلبات المُرسلة من المشغل بعد انتهاء الخياطة'], delivery:['التسليم','تسليم الطلبات الجاهزة للعملاء'], admin:['لوحة الإدارة','إدارة المستخدمين والأقسام ومتابعة أداء المشغل'] }
+  const [title, subtitle] = titles[role] || ['لوحة التحكم','']
+
+  return `
+    <div class="flex flex-wrap items-end justify-between gap-4 mb-6">
+      <div>
+        <h1 class="font-display text-3xl sm:text-4xl text-ink-700 tracking-wide">${title}</h1>
+        <p class="text-ink-400 font-ui mt-1">${subtitle}</p>
+      </div>
+      <div class="flex items-center gap-2">
+        ${role === 'shop' ? `<button id="new-order-btn" class="btn-brass">+ طلب جديد</button>` : ''}
+        ${role === 'admin' ? `<button id="add-staff-btn" class="btn-brass">+ إضافة موظف</button>` : ''}
+      </div>
+    </div>
+
+    ${renderStageStats(state.orders, viewStatuses)}
+
+    ${role === 'admin' ? renderStaffTable() : ''}
+
+    ${role === 'shop' ? renderFilterChips() : ''}
+
+    <div class="mb-5">
+      <div class="relative flex-1 min-w-[220px]">
+        <input id="search-input" type="text" value="${esc(state.search)}" placeholder="ابحث بالاسم، رقم الهاتف، أو رقم الطلب..." class="input-field" />
+      </div>
+    </div>
+
+    ${list.length === 0 ? `<p class="text-center text-ink-300 font-ui py-16">لا توجد طلبات هنا حاليًا</p>` :
+      `<div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">${list.map(o => renderOrderCard(o, role)).join('')}</div>`}
+  `
+}
+
+function renderFilterChips() {
+  const counts = (s) => s === 'all' ? state.orders.length : state.orders.filter(o => o.status === s).length
+  return `<div class="flex flex-wrap gap-2 mb-4">
+    <button data-filter="all" class="chip ${state.filter==='all'?'chip-active':''} filter-chip">الكل (${counts('all')})</button>
+    ${STATUS_ORDER.map(s => `<button data-filter="${s}" class="chip ${state.filter===s?'chip-active':''} filter-chip">${STATUS_META[s].short} (${counts(s)})</button>`).join('')}
+  </div>`
+}
+
+function renderStageStats(orders, statuses) {
+  return `<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-6">
+    ${statuses.map(s => {
+      const meta = STATUS_META[s]
+      const count = orders.filter(o => o.status === s).length
+      return `<div class="card px-4 py-3.5 flex items-center justify-between">
+        <div><p class="text-2xl font-display text-ink-700 leading-none">${count}</p><p class="text-xs font-ui text-ink-400 mt-1.5">${meta.label}</p></div>
+        <span class="w-2.5 h-2.5 rounded-full ${meta.color.split(' ')[0]}"></span>
+      </div>`
+    }).join('')}
+  </div>`
+}
+
+function renderThread(status, compact) {
+  const idx = STATUS_ORDER.indexOf(status)
+  const dim = compact ? 6 : 8
+  return `<div class="w-full overflow-x-auto pb-1"><div class="flex items-center min-w-max">
+    ${STATUS_ORDER.map((s,i) => {
+      const done = i < idx, active = i === idx
+      const circleCls = done ? 'bg-palm border-palm text-cotton' : active ? 'bg-brass border-brass text-cotton pulse-live' : 'bg-cotton border-sand-300 text-ink-300'
+      const label = compact ? '' : `<span class="text-[11px] font-ui text-center leading-tight mt-1.5 ${active?'text-brass-dark font-bold':done?'text-palm font-semibold':'text-ink-300'}">${STATUS_META[s].short}</span>`
+      const line = i < STATUS_ORDER.length - 1 ? `<div class="h-[2px] shrink-0 ${compact?'w-4':'w-8'} ${i<idx?'stitch-done':'stitch-todo'}"></div>` : ''
+      return `<div class="flex items-center"><div class="flex flex-col items-center" style="width:${compact?56:84}px"><div class="flex items-center justify-center rounded-full border-2 shrink-0 w-${dim} h-${dim} ${circleCls}" style="width:${compact?24:32}px;height:${compact?24:32}px;font-size:${compact?10:12}px">${done?'✓':i+1}</div>${label}</div>${line}</div>`
+    }).join('')}
+  </div></div>`
+}
+
+function renderOrderCard(o, role) {
+  const meta = STATUS_META[o.status]
+  const actions = renderStatusActions(o, role, true)
+  return `<div class="card p-4 sm:p-5 hover:shadow-lift transition-shadow">
+    <button data-open-order="${o.id}" class="text-right flex-1 min-w-0 w-full">
+      <div class="flex items-center gap-2 flex-wrap">
+        <span class="font-ui font-bold text-brass-dark text-sm tracking-wide">${esc(o.order_number)}</span>
+        <span class="inline-flex items-center rounded-full font-ui font-semibold text-xs px-2 py-0.5 ${meta.color}">${meta.label}</span>
+        ${o.photos && o.photos.length ? `<span class="text-ink-300 text-xs">📷 ${o.photos.length}</span>` : ''}
+      </div>
+      <h3 class="font-ui font-bold text-lg text-ink-700 mt-1.5 truncate">${esc(o.customer_name)}</h3>
+      <div class="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1.5 text-sm text-ink-400 font-ui">
+        <span>📞 ${esc(o.customer_phone)}</span>
+        ${o.delivery_date ? `<span>📅 ${dateAr(o.delivery_date)}</span>` : ''}
+        <span>💵 ${money(o.price)} ج.س</span>
+      </div>
+    </button>
+    <div class="mt-4">${renderThread(o.status, true)}</div>
+    ${actions ? `<div class="mt-4 flex flex-wrap gap-2 pt-3 border-t border-sand-200">${actions}</div>` : ''}
+  </div>`
+}
+
+function renderStatusActions(o, role, small) {
+  const options = nextAllowed(o.status, role)
+  if (options.length === 0) return ''
+  return options.map(s => `<button data-status-btn="${o.id}" data-next-status="${s}" class="btn-brass ${small ? '!px-3.5 !py-2 !text-sm' : ''}">${STATUS_META[s].label}</button>`).join('')
+}
+
+function renderOrderDetail(o) {
+  const measurementLabels = Object.fromEntries(MEASUREMENT_FIELDS.map(([k,l]) => [k, l.replace(' (سم)','')]))
+  const meas = o.measurements || {}
+  return `
+  <div class="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+    <div class="absolute inset-0 bg-ink-900/50 backdrop-blur-sm" id="detail-backdrop"></div>
+    <div class="relative bg-cotton w-full sm:max-w-2xl sm:rounded-2xl rounded-t-2xl shadow-lift max-h-[92vh] overflow-y-auto" dir="rtl">
+      <div class="sticky top-0 bg-cotton/95 backdrop-blur border-b border-sand-200 px-5 py-4 flex items-center justify-between z-10">
+        <div><span class="font-ui font-bold text-brass-dark text-sm">${esc(o.order_number)}</span><h2 class="font-display text-2xl text-ink-700 leading-tight">${esc(o.customer_name)}</h2></div>
+        <button id="detail-close" class="w-9 h-9 flex items-center justify-center rounded-full hover:bg-sand-200">✕</button>
+      </div>
+      <div class="p-5 space-y-6">
+        <div>
+          <div class="flex items-center justify-between mb-3">
+            <span class="font-ui font-semibold text-ink-500 text-sm">مسار الطلب</span>
+            <span class="inline-flex items-center rounded-full font-ui font-semibold text-sm px-3 py-1 ${STATUS_META[o.status].color}">${STATUS_META[o.status].label}</span>
+          </div>
+          ${renderThread(o.status, false)}
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-3 gap-4">
+          <div><p class="text-ink-300 text-xs font-ui mb-1">📞 الهاتف</p><p class="font-ui font-semibold text-ink-700 text-sm">${esc(o.customer_phone)}</p></div>
+          <div><p class="text-ink-300 text-xs font-ui mb-1">📅 تاريخ التسليم</p><p class="font-ui font-semibold text-ink-700 text-sm">${dateAr(o.delivery_date)}</p></div>
+          <div><p class="text-ink-300 text-xs font-ui mb-1">💵 السعر</p><p class="font-ui font-semibold text-ink-700 text-sm">${money(o.price)} ج.س</p></div>
+          <div><p class="text-ink-300 text-xs font-ui mb-1">👕 نوع القماش</p><p class="font-ui font-semibold text-ink-700 text-sm">${esc(o.fabric_type) || '—'}</p></div>
+        </div>
+        ${Object.keys(meas).length ? `<div><p class="text-ink-500 font-ui font-semibold text-sm mb-2">📏 المقاسات</p><div class="grid grid-cols-3 sm:grid-cols-4 gap-2">
+          ${Object.entries(meas).filter(([,v]) => v).map(([k,v]) => `<div class="bg-sand-100 rounded-xl px-3 py-2 text-center"><p class="text-[11px] text-ink-400 font-ui">${measurementLabels[k]||k}</p><p class="font-ui font-bold text-ink-700">${esc(v)}</p></div>`).join('')}
+        </div></div>` : ''}
+        ${o.design_notes ? `<div><p class="text-ink-500 font-ui font-semibold text-sm mb-2">📝 ملاحظات التصميم</p><p class="bg-sand-100 rounded-xl px-4 py-3 text-ink-600 font-ui text-sm leading-relaxed">${esc(o.design_notes)}</p></div>` : ''}
+        ${(o.workshop_notes || o.buttons_notes) ? `<div class="grid sm:grid-cols-2 gap-3">
+          ${o.workshop_notes ? `<div><p class="text-xs font-ui font-semibold text-ink-400 mb-1">ملاحظات المشغل</p><p class="bg-brass/10 rounded-xl px-4 py-3 text-ink-600 font-ui text-sm">${esc(o.workshop_notes)}</p></div>` : ''}
+          ${o.buttons_notes ? `<div><p class="text-xs font-ui font-semibold text-ink-400 mb-1">ملاحظات قسم الأزرار</p><p class="bg-thread-gold/15 rounded-xl px-4 py-3 text-ink-600 font-ui text-sm">${esc(o.buttons_notes)}</p></div>` : ''}
+        </div>` : ''}
+        ${o.photos && o.photos.length ? `<div><p class="text-sm font-ui font-semibold text-ink-500 mb-2">الصور</p><div class="grid grid-cols-3 sm:grid-cols-4 gap-2">
+          ${o.photos.map(u => `<a href="${u}" target="_blank" class="block aspect-square rounded-xl overflow-hidden border border-sand-300"><img src="${u}" class="w-full h-full object-cover" /></a>`).join('')}
+        </div></div>` : ''}
+      </div>
+      <div class="sticky bottom-0 bg-cotton/95 backdrop-blur border-t border-sand-200 px-5 py-4">
+        <div id="detail-actions" class="flex flex-wrap gap-2">${renderStatusActions(o, state.profile.role, false)}</div>
+      </div>
+    </div>
+  </div>`
+}
+
+let pendingPhotos = []
+
+function renderOrderForm() {
+  return `
+  <div class="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+    <div class="absolute inset-0 bg-ink-900/50 backdrop-blur-sm" id="form-backdrop"></div>
+    <form id="order-form" class="relative bg-cotton w-full sm:max-w-2xl sm:rounded-2xl rounded-t-2xl shadow-lift max-h-[92vh] overflow-y-auto" dir="rtl">
+      <div class="sticky top-0 bg-cotton/95 backdrop-blur border-b border-sand-200 px-5 py-4 flex items-center justify-between z-10">
+        <h2 class="font-display text-2xl text-ink-700">طلب جديد</h2>
+        <button type="button" id="form-close" class="w-9 h-9 flex items-center justify-center rounded-full hover:bg-sand-200">✕</button>
+      </div>
+      <div class="p-5 space-y-5">
+        <div id="form-error"></div>
+        <div class="grid sm:grid-cols-2 gap-4">
+          <div><label class="label-field">اسم العميل *</label><input class="input-field" id="f-name" required placeholder="مثال: محمد أحمد" /></div>
+          <div><label class="label-field">رقم الهاتف *</label><input class="input-field" id="f-phone" required dir="ltr" placeholder="09xxxxxxxx" /></div>
+        </div>
+        <div class="grid sm:grid-cols-3 gap-4">
+          <div><label class="label-field">نوع القماش</label><input class="input-field" id="f-fabric" placeholder="مثال: قطن أبيض" /></div>
+          <div><label class="label-field">تاريخ التسليم</label><input type="date" class="input-field" id="f-date" /></div>
+          <div><label class="label-field">السعر (ج.س)</label><input type="number" min="0" step="0.01" class="input-field" id="f-price" placeholder="0.00" /></div>
+        </div>
+        <div>
+          <label class="label-field">المقاسات</label>
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            ${MEASUREMENT_FIELDS.map(([k,l]) => `<input class="input-field text-center" placeholder="${l}" data-measure="${k}" />`).join('')}
+          </div>
+        </div>
+        <div><label class="label-field">ملاحظات التصميم</label><textarea class="input-field min-h-[90px]" id="f-notes" placeholder="تفاصيل التصميم، الطراز، الياقة، الجيوب..."></textarea></div>
+        <div>
+          <label class="label-field">الصور (اختياري)</label>
+          <div id="photo-preview" class="flex flex-wrap gap-3 mb-2"></div>
+          <label class="inline-flex items-center gap-2 btn-secondary cursor-pointer">
+            📷 اختر صور
+            <input type="file" accept="image/*" multiple id="f-photos" class="hidden" />
+          </label>
+        </div>
+      </div>
+      <div class="sticky bottom-0 bg-cotton/95 backdrop-blur border-t border-sand-200 px-5 py-4 flex gap-3">
+        <button type="submit" id="form-submit" class="btn-primary flex-1">حفظ الطلب</button>
+        <button type="button" id="form-cancel" class="btn-secondary">إلغاء</button>
+      </div>
+    </form>
+  </div>`
+}
+
+function renderPhotoPreview() {
+  const el = document.getElementById('photo-preview')
+  if (!el) return
+  el.innerHTML = pendingPhotos.map((url,i) => `
+    <div class="relative w-20 h-20 rounded-xl overflow-hidden border border-sand-300">
+      <img src="${url}" class="w-full h-full object-cover" />
+      <button type="button" data-remove-photo="${i}" class="absolute top-1 left-1 bg-ink-900/60 text-cotton rounded-full p-1 text-xs">✕</button>
+    </div>`).join('')
+}
+
+function renderStaffTable() {
+  const ROLES = ['shop','workshop','buttons','delivery','admin']
+  return `
+  <div class="card overflow-hidden mb-6">
+    <div class="px-5 py-4 border-b border-sand-200"><h2 class="font-ui font-bold text-ink-700">الموظفون والأقسام</h2></div>
+    <div class="divide-y divide-sand-200">
+      ${state.profiles.map(p => `
+        <div class="px-5 py-4 flex flex-wrap items-center justify-between gap-3">
+          <div class="min-w-0"><p class="font-ui font-semibold text-ink-700">${esc(p.full_name)}</p><p class="text-xs text-ink-300 font-ui">انضم ${dateAr(p.created_at)}</p></div>
+          <div class="flex items-center gap-3">
+            <select data-role-select="${p.id}" class="input-field !w-auto !py-2 text-sm">
+              ${ROLES.map(r => `<option value="${r}" ${p.role===r?'selected':''}>${ROLE_LABELS[r]}</option>`).join('')}
+            </select>
+            <button data-toggle-active="${p.id}" data-current="${p.is_active}" class="inline-flex items-center gap-1.5 text-xs font-ui font-semibold px-3 py-2 rounded-lg ${p.is_active?'bg-palm/10 text-palm':'bg-clay/10 text-clay'}">
+              ${p.is_active ? '✅ مفعّل' : '⛔ موقوف'}
+            </button>
+          </div>
+        </div>`).join('')}
+    </div>
+  </div>
+  <p class="text-xs text-ink-300 font-ui mb-6">لإضافة موظف جديد: أنشئ له حسابًا من Supabase → Authentication → Add user، وبعدها هيظهر هنا تلقائيًا لتحديد قسمه.</p>
+  `
+}
+
+function attachShellEvents() {
+  const notifBtn = document.getElementById('notif-btn')
+  if (notifBtn) notifBtn.addEventListener('click', async (e) => {
+    e.stopPropagation()
+    state.notifOpen = !state.notifOpen
+    if (state.notifOpen) {
+      const unreadIds = state.notifications.filter(n => !n.is_read).map(n => n.id)
+      state.notifications = state.notifications.map(n => ({ ...n, is_read: true }))
+      if (unreadIds.length) supabase.from('notifications').update({ is_read: true }).in('id', unreadIds)
+    }
+    render()
+  })
+  document.addEventListener('click', () => { if (state.notifOpen) { state.notifOpen = false; render() } }, { once: true })
+
+  const signoutBtn = document.getElementById('signout-btn')
+  if (signoutBtn) signoutBtn.addEventListener('click', signOut)
+
+  const searchInput = document.getElementById('search-input')
+  if (searchInput) {
+    searchInput.addEventListener('input', (e) => { state.search = e.target.value; renderBodyOnly() })
+    searchInput.focus()
+    searchInput.setSelectionRange(searchInput.value.length, searchInput.value.length)
+  }
+
+  document.querySelectorAll('.filter-chip').forEach(btn => btn.addEventListener('click', () => { state.filter = btn.dataset.filter; render() }))
+
+  document.querySelectorAll('[data-open-order]').forEach(btn => btn.addEventListener('click', () => {
+    const id = btn.dataset.openOrder
+    state.selectedOrder = state.orders.find(o => o.id === id)
+    render()
+  }))
+
+  const newOrderBtn = document.getElementById('new-order-btn')
+  if (newOrderBtn) newOrderBtn.addEventListener('click', () => { pendingPhotos = []; state.showOrderForm = true; render() })
+
+  const addStaffBtn = document.getElementById('add-staff-btn')
+  if (addStaffBtn) addStaffBtn.addEventListener('click', () => alert('لإضافة موظف: افتح Supabase → Authentication → Add user، ثم ارجع هنا وحدد قسمه من القائمة.'))
+
+  document.querySelectorAll('[data-status-btn]').forEach(btn => btn.addEventListener('click', async () => {
+    const orderId = btn.dataset.statusBtn
+    const nextStatus = btn.dataset.nextStatus
+    await performStatusChange(orderId, nextStatus)
+  }))
+
+  document.querySelectorAll('[data-role-select]').forEach(sel => sel.addEventListener('change', async () => {
+    await supabase.from('profiles').update({ role: sel.value }).eq('id', sel.dataset.roleSelect)
+    await loadProfiles()
+    render()
+  }))
+
+  document.querySelectorAll('[data-toggle-active]').forEach(btn => btn.addEventListener('click', async () => {
+    const newVal = btn.dataset.current !== 'true'
+    await supabase.from('profiles').update({ is_active: newVal }).eq('id', btn.dataset.toggleActive)
+    await loadProfiles()
+    render()
+  }))
+
+  const detailClose = document.getElementById('detail-close')
+  const detailBackdrop = document.getElementById('detail-backdrop')
+  if (detailClose) detailClose.addEventListener('click', () => { state.selectedOrder = null; render() })
+  if (detailBackdrop) detailBackdrop.addEventListener('click', () => { state.selectedOrder = null; render() })
+
+  const formClose = document.getElementById('form-close')
+  const formCancel = document.getElementById('form-cancel')
+  const formBackdrop = document.getElementById('form-backdrop')
+  const closeForm = () => { state.showOrderForm = false; pendingPhotos = []; render() }
+  if (formClose) formClose.addEventListener('click', closeForm)
+  if (formCancel) formCancel.addEventListener('click', closeForm)
+  if (formBackdrop) formBackdrop.addEventListener('click', closeForm)
+
+  const photoInput = document.getElementById('f-photos')
+  if (photoInput) photoInput.addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files || [])
+    for (const file of files) {
+      const path = `${Date.now()}-${Math.random().toString(36).slice(2)}-${file.name}`
+      const { error } = await supabase.storage.from('order-photos').upload(path, file)
+      if (!error) {
+        const { data } = supabase.storage.from('order-photos').getPublicUrl(path)
+        pendingPhotos.push(data.publicUrl)
+        renderPhotoPreview()
+      }
+    }
+  })
+
+  document.querySelectorAll('[data-remove-photo]').forEach(btn => btn.addEventListener('click', () => {
+    pendingPhotos.splice(Number(btn.dataset.removePhoto), 1)
+    renderPhotoPreview()
+  }))
+
+  const orderForm = document.getElementById('order-form')
+  if (orderForm) orderForm.addEventListener('submit', handleCreateOrder)
+}
+
+function renderBodyOnly() {
+  const main = document.querySelector('main')
+  if (main) main.innerHTML = renderDashboardBody(state.profile.role)
+  attachShellEvents()
+  const s = document.getElementById('search-input')
+  if (s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length) }
+}
+
+async function performStatusChange(orderId, nextStatus) {
+  const role = state.profile.role
+  let note = null
+  if (NOTE_FIELD_BY_ROLE[role]) {
+    note = prompt(`ملاحظة قبل الانتقال إلى «${STATUS_META[nextStatus].label}» (اختياري، اتركها فاضية للتخطي)`)
+  }
+  const payload = { status: nextStatus }
+  if (note && NOTE_FIELD_BY_ROLE[role]) payload[NOTE_FIELD_BY_ROLE[role]] = note.trim()
+  const { error } = await supabase.from('orders').update(payload).eq('id', orderId)
+  if (error) { alert('تعذر تحديث الحالة: ' + error.message); return }
+  await loadOrders()
+  render()
+}
+
+async function handleCreateOrder(e) {
+  e.preventDefault()
+  const errBox = document.getElementById('form-error')
+  errBox.innerHTML = ''
+  const name = document.getElementById('f-name').value.trim()
+  const phone = document.getElementById('f-phone').value.trim()
+  if (!name || !phone) { errBox.innerHTML = `<div class="bg-clay/10 border border-clay/30 text-clay rounded-xl px-4 py-3 text-sm font-ui">الاسم ورقم الهاتف مطلوبان</div>`; return }
+
+  const submitBtn = document.getElementById('form-submit')
+  submitBtn.disabled = true
+  submitBtn.textContent = 'جاري الحفظ...'
+
+  const measurements = {}
+  document.querySelectorAll('[data-measure]').forEach(inp => { if (inp.value) measurements[inp.dataset.measure] = inp.value })
+
+  try {
+    let { data: existingCustomer } = await supabase.from('customers').select('id').eq('phone', phone).maybeSingle()
+    let customerId = existingCustomer && existingCustomer.id
+    if (!customerId) {
+      const { data: newCustomer, error: custErr } = await supabase.from('customers').insert({ name, phone }).select('id').single()
+      if (custErr) throw custErr
+      customerId = newCustomer.id
+    }
+    const { error: orderErr } = await supabase.from('orders').insert({
+      customer_id: customerId,
+      customer_name: name,
+      customer_phone: phone,
+      measurements,
+      fabric_type: document.getElementById('f-fabric').value.trim() || null,
+      design_notes: document.getElementById('f-notes').value.trim() || null,
+      delivery_date: document.getElementById('f-date').value || null,
+      price: document.getElementById('f-price').value ? Number(document.getElementById('f-price').value) : 0,
+      photos: pendingPhotos,
+      status: 'new',
+      created_by: state.profile.id,
+    })
+    if (orderErr) throw orderErr
+    await loadOrders()
+    state.showOrderForm = false
+    pendingPhotos = []
+    render()
+  } catch (err) {
+    errBox.innerHTML = `<div class="bg-clay/10 border border-clay/30 text-clay rounded-xl px-4 py-3 text-sm font-ui">فشل حفظ الطلب: ${esc(err.message)}</div>`
+    submitBtn.disabled = false
+    submitBtn.textContent = 'حفظ الطلب'
+  }
+}
+
+init()
+</script>
+</body>
+</html>

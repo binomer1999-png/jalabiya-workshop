@@ -336,8 +336,7 @@ function renderDashboardBody(role) {
         <p class="text-ink-400 font-ui mt-1">${subtitle}</p>
       </div>
       <div class="flex items-center gap-2">
-        ${role === 'shop' ? `<button id="new-order-btn" class="btn-brass">+ طلب جديد</button>` : ''}
-        ${role === 'admin' ? `<button id="add-staff-btn" class="btn-brass">+ إضافة موظف</button>` : ''}
+        ${(role === 'shop' || role === 'admin') ? `<button id="new-order-btn" class="btn-brass">+ طلب جديد</button>` : ''}
       </div>
     </div>
 
@@ -345,7 +344,7 @@ function renderDashboardBody(role) {
 
     ${role === 'admin' ? renderStaffTable() : ''}
 
-    ${role === 'shop' ? renderFilterChips() : ''}
+    ${(role === 'shop' || role === 'admin') ? renderFilterChips() : ''}
 
     <div class="mb-5">
       <div class="relative flex-1 min-w-[220px]">
@@ -579,9 +578,6 @@ function attachShellEvents() {
 
   const newOrderBtn = document.getElementById('new-order-btn')
   if (newOrderBtn) newOrderBtn.addEventListener('click', () => { pendingPhotos = []; state.showOrderForm = true; render() })
-
-  const addStaffBtn = document.getElementById('add-staff-btn')
-  if (addStaffBtn) addStaffBtn.addEventListener('click', () => alert('لإضافة موظف: افتح Supabase → Authentication → Add user، ثم ارجع هنا وحدد قسمه من القائمة.'))
 
   document.querySelectorAll('[data-status-btn]').forEach(btn => btn.addEventListener('click', async () => {
     const orderId = btn.dataset.statusBtn

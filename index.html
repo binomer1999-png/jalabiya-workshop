@@ -602,7 +602,17 @@ function renderStaffTable() {
         </div>`).join('')}
     </div>
   </div>
-  <p class="text-xs text-ink-300 font-ui mb-6">لإضافة موظف جديد: أنشئ له حسابًا من Supabase → Authentication → Add user، وبعدها هيظهر هنا تلقائيًا لتحديد قسمه.</p>
+  <div class="card mb-6">
+    <div class="px-5 py-4 border-b border-sand-200"><h2 class="font-ui font-bold text-ink-700">إضافة موظف جديد</h2><p class="text-xs text-ink-300 font-ui mt-1">كل موظف يدخل بحسابه ويشوف طلبات قسمه بس (المشغل، الأزرار، التسليم، المحل). الطلب الجديد يظهر لقسم المشغل تلقائيًا.</p></div>
+    <form id="add-worker-form" class="px-5 py-4 grid gap-3 sm:grid-cols-2" autocomplete="off">
+      <input id="w-name" class="input-field" placeholder="اسم الموظف" required />
+      <input id="w-email" type="email" dir="ltr" class="input-field" placeholder="البريد (للدخول)" required />
+      <input id="w-pass" type="text" dir="ltr" class="input-field" placeholder="كلمة السر (8 أحرف على الأقل)" minlength="8" required autocomplete="new-password" />
+      <select id="w-role" class="input-field">${ROLES.filter(r => r !== 'admin').map(r => `<option value="${r}">${ROLE_LABELS[r]}</option>`).join('')}</select>
+      <p id="w-msg" class="text-sm font-ui sm:col-span-2 hidden"></p>
+      <button type="submit" id="w-btn" class="btn-brass sm:col-span-2">إضافة الموظف</button>
+    </form>
+  </div>
   `
 }
 
@@ -646,6 +656,24 @@ function attachShellEvents() {
     const nextStatus = btn.dataset.nextStatus
     await performStatusChange(orderId, nextStatus)
   }))
+
+  const wf = document.getElementById('add-worker-form')
+  if (wf) wf.addEventListener('submit', async (e) => {
+    e.preventDefault()
+    const msg = document.getElementById('w-msg'), btn = document.getElementById('w-btn')
+    const show = (t, ok) => { msg.textContent = t; msg.className = 'text-sm font-ui sm:col-span-2 ' + (ok ? 'text-palm' : 'text-clay') }
+    btn.disabled = true; show('جاري الإضافة...', true)
+    try {
+      const { data, error } = await supabase.functions.invoke('create-worker', { body: {
+        full_name: document.getElementById('w-name').value, email: document.getElementById('w-email').value,
+        password: document.getElementById('w-pass').value, role: document.getElementById('w-role').value } })
+      let errMsg = data && data.error
+      if (error && !errMsg) { try { errMsg = (await error.context.json()).error } catch (_) { errMsg = 'تعذر الاتصال' } }
+      if (errMsg) { show(errMsg, false); btn.disabled = false; return }
+      await loadProfiles(); render()
+      const m2 = document.getElementById('w-msg'); if (m2) { m2.textContent = 'تمت إضافة الموظف. سلّمه البريد وكلمة السر.'; m2.className = 'text-sm font-ui sm:col-span-2 text-palm' }
+    } catch (err) { show('تعذر إضافة الموظف', false); btn.disabled = false }
+  })
 
   document.querySelectorAll('[data-role-select]').forEach(sel => sel.addEventListener('change', async () => {
     await supabase.from('profiles').update({ role: sel.value }).eq('id', sel.dataset.roleSelect)

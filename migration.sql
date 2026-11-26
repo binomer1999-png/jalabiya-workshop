@@ -152,3 +152,9 @@ drop policy if exists events_select_all on public.order_events;
 create policy events_select_all on public.order_events for select using (public.current_role_name() is not null);
 drop policy if exists profiles_select_all on public.profiles;
 create policy profiles_select_all on public.profiles for select using (auth.uid() = id or public.current_role_name() is not null);
+
+-- Private photos: bucket is private; only active staff can read objects (via signed URLs)
+update storage.buckets set public = false where id = 'order-photos';
+drop policy if exists order_photos_public_read on storage.objects;
+drop policy if exists order_photos_staff_read on storage.objects;
+create policy order_photos_staff_read on storage.objects for select using (bucket_id = 'order-photos' and public.current_role_name() is not null);

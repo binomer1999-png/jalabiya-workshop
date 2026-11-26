@@ -242,6 +242,11 @@ async function loadProfileAndData() {
 }
 
 async function signIn(email, password) {
+  email = (email || '').trim()
+  if (!email.includes('@')) {
+    const { data: em } = await supabase.rpc('login_email', { u: email })
+    email = em || (email.toLowerCase() + '@jalabiya.test')
+  }
   const { error } = await supabase.auth.signInWithPassword({ email, password })
   return error
 }
@@ -277,8 +282,8 @@ function renderLogin() {
       <form id="login-form" class="bg-cotton rounded-2xl shadow-lift p-6 space-y-4">
         <div id="login-error"></div>
         <div>
-          <label class="label-field">البريد الإلكتروني</label>
-          <input type="email" required id="login-email" class="input-field" dir="ltr" placeholder="you@workshop.com" autocomplete="username" />
+          <label class="label-field">رقم الدخول (ID) أو البريد</label>
+          <input type="text" required id="login-email" class="input-field" dir="ltr" placeholder="ID" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" />
         </div>
         <div>
           <label class="label-field">كلمة المرور</label>
@@ -307,7 +312,7 @@ function attachLoginEvents() {
     btn.textContent = 'تسجيل الدخول'
     if (error) {
       const net = /fetch|network|failed/i.test(error.message || '') || error.status === 0
-      errBox.innerHTML = `<div class="bg-clay/10 border border-clay/30 text-clay rounded-xl px-4 py-3 text-sm font-ui text-center">${net ? 'تعذر الاتصال بالخادم، تحقق من الإنترنت أو من حالة قاعدة البيانات' : 'البريد الإلكتروني أو كلمة المرور غير صحيحة'}</div>`
+      errBox.innerHTML = `<div class="bg-clay/10 border border-clay/30 text-clay rounded-xl px-4 py-3 text-sm font-ui text-center">${net ? 'تعذر الاتصال بالخادم، تحقق من الإنترنت أو من حالة قاعدة البيانات' : 'الـ ID أو كلمة المرور غير صحيحة'}</div>`
     }
   })
 }
@@ -606,7 +611,7 @@ function renderStaffTable() {
     <div class="px-5 py-4 border-b border-sand-200"><h2 class="font-ui font-bold text-ink-700">إضافة موظف جديد</h2><p class="text-xs text-ink-300 font-ui mt-1">كل موظف يدخل بحسابه ويشوف طلبات قسمه بس (المشغل، الأزرار، التسليم، المحل). الطلب الجديد يظهر لقسم المشغل تلقائيًا.</p></div>
     <form id="add-worker-form" class="px-5 py-4 grid gap-3 sm:grid-cols-2" autocomplete="off">
       <input id="w-name" class="input-field" placeholder="اسم الموظف" required />
-      <input id="w-email" type="email" dir="ltr" class="input-field" placeholder="البريد (للدخول)" required />
+      <input id="w-email" type="text" dir="ltr" class="input-field" placeholder="ID للدخول (حروف إنجليزي وأرقام، مثل ahmed1)" pattern="[A-Za-z0-9._@+-]+" autocapitalize="none" required />
       <input id="w-pass" type="text" dir="ltr" class="input-field" placeholder="كلمة السر (8 أحرف على الأقل)" minlength="8" required autocomplete="new-password" />
       <select id="w-role" class="input-field">${ROLES.filter(r => r !== 'admin').map(r => `<option value="${r}">${ROLE_LABELS[r]}</option>`).join('')}</select>
       <p id="w-msg" class="text-sm font-ui sm:col-span-2 hidden"></p>
@@ -665,13 +670,13 @@ function attachShellEvents() {
     btn.disabled = true; show('جاري الإضافة...', true)
     try {
       const { data, error } = await supabase.functions.invoke('create-worker', { body: {
-        full_name: document.getElementById('w-name').value, email: document.getElementById('w-email').value,
+        full_name: document.getElementById('w-name').value, email: (v => v.includes('@') ? v : v.toLowerCase() + '@jalabiya.test')(document.getElementById('w-email').value.trim()),
         password: document.getElementById('w-pass').value, role: document.getElementById('w-role').value } })
       let errMsg = data && data.error
       if (error && !errMsg) { try { errMsg = (await error.context.json()).error } catch (_) { errMsg = 'تعذر الاتصال' } }
       if (errMsg) { show(errMsg, false); btn.disabled = false; return }
       await loadProfiles(); render()
-      const m2 = document.getElementById('w-msg'); if (m2) { m2.textContent = 'تمت إضافة الموظف. سلّمه البريد وكلمة السر.'; m2.className = 'text-sm font-ui sm:col-span-2 text-palm' }
+      const m2 = document.getElementById('w-msg'); if (m2) { m2.textContent = 'تمت إضافة الموظف. سلّمه الـ ID وكلمة السر.'; m2.className = 'text-sm font-ui sm:col-span-2 text-palm' }
     } catch (err) { show('تعذر إضافة الموظف', false); btn.disabled = false }
   })
 

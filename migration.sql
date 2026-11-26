@@ -181,3 +181,41 @@ update auth.identities set identity_data = jsonb_set(identity_data, '{email}', '
 -- update auth.identities set identity_data = jsonb_set(identity_data, '{email}', '"binomer1999@gmail.com"'), updated_at = now() where user_id = '99d647cc-e180-4fde-a8f3-223bea326684' and provider = 'email';
 -- create or replace function public.login_email(u text) returns text language sql stable security definer set search_path to 'public','auth' as $$
 --   select a.email::text from auth.users a join public.profiles p on p.id = a.id where lower(p.username) = lower(trim(u)) and p.is_active limit 1 $$;
+
+-- ===== Per-worker order assignment (added 2026-11-26) =====
+-- Each order can be assigned to one specific worker per department. NULL = any worker in that department (old behavior).
+alter table public.orders add column if not exists assigned_workshop uuid references public.profiles(id) on delete set null;
+alter table public.orders add column if not exists assigned_buttons  uuid references public.profiles(id) on delete set null;
+alter table public.orders add column if not exists assigned_delivery uuid references public.profiles(id) on delete set null;
+
+create or replace function public.can_see_order(o public.orders) returns boolean
+language sql stable security definer set search_path = public as $$
+  select case public.current_role_name()
+    when 'admin' then true
+    when 'shop' then true
+    when 'workshop' then o.assigned_workshop is null or o.assigned_workshop = auth.uid()
+    when 'buttons'  then o.assigned_buttons  is null or o.assigned_buttons  = auth.uid()
+    when 'delivery' then o.assigned_delivery is null or o.assigned_delivery = auth.uid()
+    else false end
+$$;
+
+drop policy if exists orders_select_all on public.orders;
+drop policy if exists orders_select_assigned on public.orders;
+create policy orders_select_assigned on public.orders for select using (public.can_see_order(orders));
+drop policy if exists orders_update_by_role on public.orders;
+create policy orders_update_by_role on public.orders for update using (public.can_see_order(orders));
+
+-- Notifications: department workers only see notifications for orders they can see
+drop policy if exists notifications_select_own_role on public.notifications;
+create policy notifications_select_own_role on public.notifications for select using (
+  public.current_role_name() = 'admin'
+  or (target_role = public.current_role_name() and exists (select 1 from public.orders o where o.id = notifications.order_id))
+);
+
+-- ROLLBACK:
+-- drop policy if exists orders_select_assigned on public.orders;
+-- create policy orders_select_all on public.orders for select using (public.current_role_name() is not null);
+-- drop policy if exists orders_update_by_role on public.orders;
+-- create policy orders_update_by_role on public.orders for update using (public.current_role_name() is not null);
+-- drop policy if exists notifications_select_own_role on public.notifications;
+-- create policy notifications_select_own_role on public.notifications for select using ((target_role = public.current_role_name()) or (public.current_role_name() = 'admin'));

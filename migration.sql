@@ -158,3 +158,26 @@ update storage.buckets set public = false where id = 'order-photos';
 drop policy if exists order_photos_public_read on storage.objects;
 drop policy if exists order_photos_staff_read on storage.objects;
 create policy order_photos_staff_read on storage.objects for select using (bucket_id = 'order-photos' and public.current_role_name() is not null);
+
+
+-- ===== Short-ID login (added 2026-11-26) =====
+-- profiles.username holds the short login ID. Workers created by ID get auth email <id>@jalabiya.test.
+-- (column + trigger change were applied earlier in the SQL editor: alter table public.profiles add column if not exists username text;
+--  and handle_new_user() sets username from the ID.)
+
+-- ===== Privacy fix: login_email no longer discloses private emails (2026-11-26) =====
+-- Before: login_email(u) looked up auth.users by profiles.username and returned the real email (leaked owner email behind 'admin').
+-- After: it derives the login email from the ID only, with no table lookup, so nothing private is returned to anon callers.
+create or replace function public.login_email(u text) returns text
+language sql immutable set search_path = public as $$ select lower(btrim(u)) || '@jalabiya.test' $$;
+-- Owner login email moved to the ID-derived address so ID 'admin' + same password keeps working:
+update auth.users set email = 'admin@jalabiya.test', updated_at = now()
+  where id = '99d647cc-e180-4fde-a8f3-223bea326684' and email = 'binomer1999@gmail.com';
+update auth.identities set identity_data = jsonb_set(identity_data, '{email}', '"admin@jalabiya.test"'), updated_at = now()
+  where user_id = '99d647cc-e180-4fde-a8f3-223bea326684' and provider = 'email';
+
+-- ===== ROLLBACK (restores previous behavior and owner access by real email) =====
+-- update auth.users set email = 'binomer1999@gmail.com', updated_at = now() where id = '99d647cc-e180-4fde-a8f3-223bea326684';
+-- update auth.identities set identity_data = jsonb_set(identity_data, '{email}', '"binomer1999@gmail.com"'), updated_at = now() where user_id = '99d647cc-e180-4fde-a8f3-223bea326684' and provider = 'email';
+-- create or replace function public.login_email(u text) returns text language sql stable security definer set search_path to 'public','auth' as $$
+--   select a.email::text from auth.users a join public.profiles p on p.id = a.id where lower(p.username) = lower(trim(u)) and p.is_active limit 1 $$;

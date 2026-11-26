@@ -171,10 +171,20 @@ function showError(msg) {
   const el = document.getElementById('global-error')
   if (el) { el.textContent = msg; el.classList.remove('hidden') } else alert(msg)
 }
+const urlCache = {}
+const photoUrl = (p) => (!p ? '' : /^https?:/.test(p) ? p : (urlCache[p] || ''))
+async function signPaths(paths) {
+  const need = [...new Set(paths.filter(p => p && !/^https?:/.test(p) && !urlCache[p]))]
+  if (!need.length) return
+  const { data, error } = await supabase.storage.from('order-photos').createSignedUrls(need, 3600)
+  if (error || !data) return
+  data.forEach(d => { if (d.signedUrl && d.path) urlCache[d.path] = d.signedUrl })
+}
 async function loadOrders() {
   const { data, error } = await supabase.from('orders').select('*').order('created_at', { ascending: false })
   if (error) { showError('تعذر تحميل الطلبات: ' + error.message); return }
   state.orders = data || []
+  await signPaths(state.orders.flatMap(o => o.photos || []))
 }
 
 async function loadProfiles() {
@@ -500,7 +510,7 @@ function renderOrderDetail(o) {
           ${o.buttons_notes ? `<div><p class="text-xs font-ui font-semibold text-ink-400 mb-1">ملاحظات قسم الأزرار</p><p class="bg-thread-gold/15 rounded-xl px-4 py-3 text-ink-600 font-ui text-sm">${esc(o.buttons_notes)}</p></div>` : ''}
         </div>` : ''}
         ${o.photos && o.photos.length ? `<div><p class="text-sm font-ui font-semibold text-ink-500 mb-2">الصور</p><div class="grid grid-cols-3 sm:grid-cols-4 gap-2">
-          ${o.photos.map(u => `<a href="${u}" target="_blank" class="block aspect-square rounded-xl overflow-hidden border border-sand-300"><img src="${u}" class="w-full h-full object-cover" /></a>`).join('')}
+          ${o.photos.map(u => `<a href="${photoUrl(u)}" target="_blank" class="block aspect-square rounded-xl overflow-hidden border border-sand-300"><img src="${photoUrl(u)}" class="w-full h-full object-cover" /></a>`).join('')}
         </div></div>` : ''}
       </div>
       <div class="sticky bottom-0 bg-cotton/95 backdrop-blur border-t border-sand-200 px-5 py-4">
@@ -567,7 +577,7 @@ function renderPhotoPreview() {
   if (!el) return
   el.innerHTML = pendingPhotos.map((url,i) => `
     <div class="relative w-20 h-20 rounded-xl overflow-hidden border border-sand-300">
-      <img src="${url}" class="w-full h-full object-cover" />
+      <img src="${photoUrl(url)}" class="w-full h-full object-cover" />
       <button type="button" data-remove-photo="${i}" class="absolute top-1 left-1 bg-ink-900/60 text-cotton rounded-full p-1 text-xs">✕</button>
     </div>`).join('')
 }
@@ -670,8 +680,8 @@ function attachShellEvents() {
       const path = `${Date.now()}-${Math.random().toString(36).slice(2)}-${file.name}`
       const { error } = await supabase.storage.from('order-photos').upload(path, file)
       if (!error) {
-        const { data } = supabase.storage.from('order-photos').getPublicUrl(path)
-        pendingPhotos.push(data.publicUrl)
+        await signPaths([path])
+        pendingPhotos.push(path)
         renderPhotoPreview()
       }
     }

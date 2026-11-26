@@ -51,6 +51,8 @@
   @keyframes pulse-ring { 0% { box-shadow:0 0 0 0 rgba(176,133,73,.45);} 100% { box-shadow:0 0 0 12px rgba(176,133,73,0);} }
   .pulse-live { animation: pulse-ring 1.8s cubic-bezier(.4,0,.6,1) infinite; }
   body { font-family:'Tajawal',sans-serif; }
+  html, body { max-width:100vw; overflow-x:hidden; }
+  .card { min-width:0; }
 </style>
 </head>
 <body class="bg-sand-100 text-ink-700 antialiased min-h-screen">
@@ -122,6 +124,7 @@ const state = {
   filter: 'all',
   selectedOrder: null,
   showOrderForm: false,
+  editingOrder: null,
   notifications: [],
   notifOpen: false,
   ordersChannel: null,
@@ -134,8 +137,43 @@ const money = (n) => Number(n || 0).toLocaleString('ar-EG')
 const dateAr = (d) => d ? new Date(d).toLocaleDateString('ar-EG') : '—'
 const dtAr = (d) => d ? new Date(d).toLocaleString('ar-EG') : '—'
 
+// رقم دولي: يبدأ بـ + أو 00 فيُحفظ كما هو. الرقم المحلي لا يُخمَّن بلده: يُسأل عنه، ويُحفظ اختيار الموظف لهذا الرقم على هذا الجهاز.
+const APP_DEFAULT_CC = null // اختياري: ضع كود دولة (مثل '249') فقط إذا أكدت أن كل العملاء المحليين منها
+const ccKey = (p) => 'wa_cc_' + String(p||'').replace(/\D/g,'')
+const savedCc = (p) => { try { return localStorage.getItem(ccKey(p)) || null } catch (e) { return null } }
+function waPhone(p, cc) {
+  const raw = String(p||'').trim()
+  const d = raw.replace(/\D/g,'')
+  if (!d) return null
+  if (raw.startsWith('+')) return d
+  if (d.startsWith('00')) return d.slice(2)
+  const c = cc || savedCc(raw) || APP_DEFAULT_CC
+  return c ? c + d.replace(/^0+/, '') : null
+}
+const remaining = (o) => Math.max(0, Number(o.price||0) - Number(o.deposit||0))
+const isOverdue = (o) => o.delivery_date && !o.is_cancelled && o.status !== 'delivered' && new Date(o.delivery_date + 'T23:59:59') < new Date()
+const canManage = () => state.profile && (state.profile.role === 'shop' || state.profile.role === 'admin')
+function waLink(o, cc) {
+  const msg = o.status === 'ready_for_pickup'
+    ? `السلام عليكم ${o.customer_name}، طلبك رقم ${o.order_number} جاهز للاستلام. المتبقي: ${money(remaining(o))} ج.س`
+    : `السلام عليكم ${o.customer_name}، حالة طلبك رقم ${o.order_number}: ${STATUS_META[o.status].label}`
+  const ph = waPhone(o.customer_phone, cc)
+  return ph ? `https://wa.me/${ph}?text=${encodeURIComponent(msg)}` : null
+}
+function printReceipt(o) {
+  const w = window.open('', '_blank')
+  if (!w) { alert('اسمح بالنوافذ المنبثقة لطباعة الإيصال'); return }
+  w.document.write(`<html dir="rtl"><head><meta charset="utf-8"><title>${esc(o.order_number)}</title><style>body{font-family:Tahoma,Arial,sans-serif;padding:24px;max-width:420px;margin:auto}h1{text-align:center;margin:0 0 4px}hr{margin:12px 0}div.r{display:flex;justify-content:space-between;margin:6px 0}</style></head><body><h1>مشغل الجلابية</h1><p style="text-align:center;margin:0">إيصال طلب ${esc(o.order_number)}</p><hr><div class="r"><span>العميل</span><b>${esc(o.customer_name)}</b></div><div class="r"><span>الهاتف</span><b>${esc(o.customer_phone)}</b></div><div class="r"><span>القماش</span><b>${esc(o.fabric_type)||'—'}</b></div><div class="r"><span>تاريخ التسليم</span><b>${dateAr(o.delivery_date)}</b></div><hr><div class="r"><span>السعر</span><b>${money(o.price)} ج.س</b></div><div class="r"><span>العربون</span><b>${money(o.deposit)} ج.س</b></div><div class="r"><span>المتبقي</span><b>${money(remaining(o))} ج.س</b></div></body></html>`)
+  w.document.close()
+  setTimeout(() => { w.focus(); w.print() }, 400)
+}
+function showError(msg) {
+  const el = document.getElementById('global-error')
+  if (el) { el.textContent = msg; el.classList.remove('hidden') } else alert(msg)
+}
 async function loadOrders() {
-  const { data } = await supabase.from('orders').select('*').order('created_at', { ascending: false })
+  const { data, error } = await supabase.from('orders').select('*').order('created_at', { ascending: false })
+  if (error) { showError('تعذر تحميل الطلبات: ' + error.message); return }
   state.orders = data || []
 }
 
@@ -258,7 +296,8 @@ function attachLoginEvents() {
     btn.disabled = false
     btn.textContent = 'تسجيل الدخول'
     if (error) {
-      errBox.innerHTML = `<div class="bg-clay/10 border border-clay/30 text-clay rounded-xl px-4 py-3 text-sm font-ui text-center">البريد الإلكتروني أو كلمة المرور غير صحيحة</div>`
+      const net = /fetch|network|failed/i.test(error.message || '') || error.status === 0
+      errBox.innerHTML = `<div class="bg-clay/10 border border-clay/30 text-clay rounded-xl px-4 py-3 text-sm font-ui text-center">${net ? 'تعذر الاتصال بالخادم، تحقق من الإنترنت أو من حالة قاعدة البيانات' : 'البريد الإلكتروني أو كلمة المرور غير صحيحة'}</div>`
     }
   })
 }
@@ -296,6 +335,7 @@ function renderShell() {
       </div>
     </header>
     <main class="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+      <div id="global-error" class="hidden mb-4 bg-clay/10 border border-clay/30 text-clay rounded-xl px-4 py-3 text-sm font-ui"></div>
       ${renderDashboardBody(role)}
     </main>
   </div>
@@ -316,7 +356,7 @@ function renderNotifPanel() {
 
 function renderDashboardBody(role) {
   const viewStatuses = DEPT_VIEW[role] || STATUS_ORDER
-  let list = state.orders.filter(o => viewStatuses.includes(o.status))
+  let list = state.orders.filter(o => viewStatuses.includes(o.status) && (canManage() || !o.is_cancelled))
   if (role !== 'shop' && role !== 'admin') {
     list = [...list].sort((a,b) => new Date(a.created_at) - new Date(b.created_at))
   }
@@ -407,6 +447,9 @@ function renderOrderCard(o, role) {
         <span>📞 ${esc(o.customer_phone)}</span>
         ${o.delivery_date ? `<span>📅 ${dateAr(o.delivery_date)}</span>` : ''}
         <span>💵 ${money(o.price)} ج.س</span>
+        ${Number(o.deposit||0) > 0 ? `<span>المتبقي: ${money(remaining(o))}</span>` : ''}
+        ${isOverdue(o) ? '<span class="text-clay font-bold">⚠️ متأخر</span>' : ''}
+        ${o.is_cancelled ? '<span class="text-clay font-bold">⛔ ملغي</span>' : ''}
       </div>
     </button>
     <div class="mt-4">${renderThread(o.status, true)}</div>
@@ -415,6 +458,7 @@ function renderOrderCard(o, role) {
 }
 
 function renderStatusActions(o, role, small) {
+  if (o.is_cancelled) return ''
   const options = nextAllowed(o.status, role)
   if (options.length === 0) return ''
   return options.map(s => `<button data-status-btn="${o.id}" data-next-status="${s}" class="btn-brass ${small ? '!px-3.5 !py-2 !text-sm' : ''}">${STATUS_META[s].label}</button>`).join('')
@@ -443,6 +487,8 @@ function renderOrderDetail(o) {
           <div><p class="text-ink-300 text-xs font-ui mb-1">📞 الهاتف</p><p class="font-ui font-semibold text-ink-700 text-sm">${esc(o.customer_phone)}</p></div>
           <div><p class="text-ink-300 text-xs font-ui mb-1">📅 تاريخ التسليم</p><p class="font-ui font-semibold text-ink-700 text-sm">${dateAr(o.delivery_date)}</p></div>
           <div><p class="text-ink-300 text-xs font-ui mb-1">💵 السعر</p><p class="font-ui font-semibold text-ink-700 text-sm">${money(o.price)} ج.س</p></div>
+          <div><p class="text-ink-300 text-xs font-ui mb-1">العربون</p><p class="font-ui font-semibold text-ink-700 text-sm">${money(o.deposit)} ج.س</p></div>
+          <div><p class="text-ink-300 text-xs font-ui mb-1">المتبقي</p><p class="font-ui font-semibold text-sm ${remaining(o)>0?'text-clay':'text-palm'}">${money(remaining(o))} ج.س</p></div>
           <div><p class="text-ink-300 text-xs font-ui mb-1">👕 نوع القماش</p><p class="font-ui font-semibold text-ink-700 text-sm">${esc(o.fabric_type) || '—'}</p></div>
         </div>
         ${Object.keys(meas).length ? `<div><p class="text-ink-500 font-ui font-semibold text-sm mb-2">📏 المقاسات</p><div class="grid grid-cols-3 sm:grid-cols-4 gap-2">
@@ -458,7 +504,12 @@ function renderOrderDetail(o) {
         </div></div>` : ''}
       </div>
       <div class="sticky bottom-0 bg-cotton/95 backdrop-blur border-t border-sand-200 px-5 py-4">
-        <div id="detail-actions" class="flex flex-wrap gap-2">${renderStatusActions(o, state.profile.role, false)}</div>
+        <div id="detail-actions" class="flex flex-wrap gap-2">${renderStatusActions(o, state.profile.role, false)}
+          ${(canManage() || state.profile.role === 'delivery') ? (waLink(o) ? `<a href="${waLink(o)}" target="_blank" rel="noopener" class="btn-secondary">💬 واتساب</a>` : `<button type="button" id="wa-ask-btn" data-order="${o.id}" class="btn-secondary">💬 واتساب</button>`) + `<button type="button" id="print-btn" data-order="${o.id}" class="btn-secondary">🖨️ إيصال</button>` : ''}
+          ${canManage() && !o.is_cancelled ? `<button type="button" id="edit-btn" data-order="${o.id}" class="btn-secondary">✏️ تعديل</button>` : ''}
+          ${state.profile.role === 'admin' && STATUS_ORDER.indexOf(o.status) > 0 && !o.is_cancelled ? `<button type="button" id="back-btn" data-order="${o.id}" class="btn-secondary">↩️ رجوع مرحلة</button>` : ''}
+          ${canManage() && !o.is_cancelled && o.status !== 'delivered' ? `<button type="button" id="cancel-order-btn" data-order="${o.id}" class="btn-secondary !text-clay">⛔ إلغاء الطلب</button>` : ''}
+        </div>
       </div>
     </div>
   </div>`
@@ -472,7 +523,7 @@ function renderOrderForm() {
     <div class="absolute inset-0 bg-ink-900/50 backdrop-blur-sm" id="form-backdrop"></div>
     <form id="order-form" class="relative bg-cotton w-full sm:max-w-2xl sm:rounded-2xl rounded-t-2xl shadow-lift max-h-[92vh] overflow-y-auto" dir="rtl">
       <div class="sticky top-0 bg-cotton/95 backdrop-blur border-b border-sand-200 px-5 py-4 flex items-center justify-between z-10">
-        <h2 class="font-display text-2xl text-ink-700">طلب جديد</h2>
+        <h2 class="font-display text-2xl text-ink-700">${state.editingOrder ? 'تعديل الطلب ' + esc(state.editingOrder.order_number) : 'طلب جديد'}</h2>
         <button type="button" id="form-close" class="w-9 h-9 flex items-center justify-center rounded-full hover:bg-sand-200">✕</button>
       </div>
       <div class="p-5 space-y-5">
@@ -481,10 +532,11 @@ function renderOrderForm() {
           <div><label class="label-field">اسم العميل *</label><input class="input-field" id="f-name" required placeholder="مثال: محمد أحمد" /></div>
           <div><label class="label-field">رقم الهاتف *</label><input class="input-field" id="f-phone" required dir="ltr" placeholder="09xxxxxxxx" /></div>
         </div>
-        <div class="grid sm:grid-cols-3 gap-4">
+        <div class="grid sm:grid-cols-2 gap-4">
           <div><label class="label-field">نوع القماش</label><input class="input-field" id="f-fabric" placeholder="مثال: قطن أبيض" /></div>
           <div><label class="label-field">تاريخ التسليم</label><input type="date" class="input-field" id="f-date" /></div>
           <div><label class="label-field">السعر (ج.س)</label><input type="number" min="0" step="0.01" class="input-field" id="f-price" placeholder="0.00" /></div>
+          <div><label class="label-field">العربون (ج.س)</label><input type="number" min="0" step="0.01" class="input-field" id="f-deposit" placeholder="0.00" /></div>
         </div>
         <div>
           <label class="label-field">المقاسات</label>
@@ -503,7 +555,7 @@ function renderOrderForm() {
         </div>
       </div>
       <div class="sticky bottom-0 bg-cotton/95 backdrop-blur border-t border-sand-200 px-5 py-4 flex gap-3">
-        <button type="submit" id="form-submit" class="btn-primary flex-1">حفظ الطلب</button>
+        <button type="submit" id="form-submit" class="btn-primary flex-1">${state.editingOrder ? 'حفظ التعديلات' : 'حفظ الطلب'}</button>
         <button type="button" id="form-cancel" class="btn-secondary">إلغاء</button>
       </div>
     </form>
@@ -577,7 +629,7 @@ function attachShellEvents() {
   }))
 
   const newOrderBtn = document.getElementById('new-order-btn')
-  if (newOrderBtn) newOrderBtn.addEventListener('click', () => { pendingPhotos = []; state.showOrderForm = true; render() })
+  if (newOrderBtn) newOrderBtn.addEventListener('click', () => { state.editingOrder = null; pendingPhotos = []; state.showOrderForm = true; render() })
 
   document.querySelectorAll('[data-status-btn]').forEach(btn => btn.addEventListener('click', async () => {
     const orderId = btn.dataset.statusBtn
@@ -606,7 +658,7 @@ function attachShellEvents() {
   const formClose = document.getElementById('form-close')
   const formCancel = document.getElementById('form-cancel')
   const formBackdrop = document.getElementById('form-backdrop')
-  const closeForm = () => { state.showOrderForm = false; pendingPhotos = []; render() }
+  const closeForm = () => { state.showOrderForm = false; state.editingOrder = null; pendingPhotos = []; render() }
   if (formClose) formClose.addEventListener('click', closeForm)
   if (formCancel) formCancel.addEventListener('click', closeForm)
   if (formBackdrop) formBackdrop.addEventListener('click', closeForm)
@@ -631,7 +683,48 @@ function attachShellEvents() {
   }))
 
   const orderForm = document.getElementById('order-form')
-  if (orderForm) orderForm.addEventListener('submit', handleCreateOrder)
+  if (orderForm) {
+    orderForm.addEventListener('submit', handleCreateOrder)
+    const eo = state.editingOrder
+    if (eo) {
+      const set = (id, v) => { document.getElementById(id).value = v == null ? '' : v }
+      set('f-name', eo.customer_name); set('f-phone', eo.customer_phone); set('f-fabric', eo.fabric_type)
+      set('f-date', eo.delivery_date); set('f-price', eo.price); set('f-deposit', eo.deposit); set('f-notes', eo.design_notes)
+      document.querySelectorAll('[data-measure]').forEach(inp => { inp.value = (eo.measurements || {})[inp.dataset.measure] || '' })
+      renderPhotoPreview()
+    }
+  }
+  document.querySelectorAll('.overflow-x-auto .pulse-live').forEach(el => {
+    const box = el.closest('.overflow-x-auto')
+    if (!box) return
+    const b = box.getBoundingClientRect(), r = el.getBoundingClientRect()
+    box.scrollLeft += (r.left + r.width / 2) - (b.left + b.width / 2)
+  })
+  const findOrder = (btn) => state.orders.find(o => o.id === btn.dataset.order)
+  const wb = document.getElementById('wa-ask-btn'); if (wb) wb.addEventListener('click', () => {
+    const cc = (prompt('رقم العميل بدون كود دولة. اكتب كود الدولة (مثال: 249 للسودان، 20 لمصر):') || '').replace(/\D/g,'')
+    if (!cc) return
+    const o0 = findOrder(wb)
+    try { localStorage.setItem(ccKey(o0.customer_phone), cc) } catch (e) {}
+    const link = waLink(o0, cc)
+    if (link) window.open(link, '_blank', 'noopener')
+  })
+  const pb = document.getElementById('print-btn'); if (pb) pb.addEventListener('click', () => printReceipt(findOrder(pb)))
+  const eb = document.getElementById('edit-btn'); if (eb) eb.addEventListener('click', () => { const o = findOrder(eb); state.editingOrder = o; pendingPhotos = [...(o.photos || [])]; state.selectedOrder = null; state.showOrderForm = true; render() })
+  const bb = document.getElementById('back-btn'); if (bb) bb.addEventListener('click', async () => {
+    const o = findOrder(bb); const prev = STATUS_ORDER[STATUS_ORDER.indexOf(o.status) - 1]
+    if (!confirm(`إرجاع الطلب إلى «${STATUS_META[prev].label}»؟`)) return
+    const { error } = await supabase.from('orders').update({ status: prev }).eq('id', o.id)
+    if (error) { alert('تعذر الإرجاع: ' + error.message); return }
+    await loadOrders(); state.selectedOrder = state.orders.find(x => x.id === o.id); render()
+  })
+  const cb = document.getElementById('cancel-order-btn'); if (cb) cb.addEventListener('click', async () => {
+    const o = findOrder(cb)
+    if (!confirm(`إلغاء الطلب ${o.order_number} للعميل ${o.customer_name}؟`)) return
+    const { error } = await supabase.from('orders').update({ is_cancelled: true }).eq('id', o.id)
+    if (error) { alert('تعذر الإلغاء: ' + error.message); return }
+    await loadOrders(); state.selectedOrder = state.orders.find(x => x.id === o.id); render()
+  })
 }
 
 function renderBodyOnly() {
@@ -679,7 +772,7 @@ async function handleCreateOrder(e) {
       if (custErr) throw custErr
       customerId = newCustomer.id
     }
-    const { error: orderErr } = await supabase.from('orders').insert({
+    const fields = {
       customer_id: customerId,
       customer_name: name,
       customer_phone: phone,
@@ -688,19 +781,26 @@ async function handleCreateOrder(e) {
       design_notes: document.getElementById('f-notes').value.trim() || null,
       delivery_date: document.getElementById('f-date').value || null,
       price: document.getElementById('f-price').value ? Number(document.getElementById('f-price').value) : 0,
+      deposit: document.getElementById('f-deposit').value ? Number(document.getElementById('f-deposit').value) : 0,
       photos: pendingPhotos,
-      status: 'new',
-      created_by: state.profile.id,
-    })
+    }
+    if (fields.deposit > fields.price) throw new Error('العربون أكبر من السعر')
+    let orderErr
+    if (state.editingOrder) {
+      ;({ error: orderErr } = await supabase.from('orders').update(fields).eq('id', state.editingOrder.id))
+    } else {
+      ;({ error: orderErr } = await supabase.from('orders').insert({ ...fields, status: 'new', created_by: state.profile.id }))
+    }
     if (orderErr) throw orderErr
     await loadOrders()
     state.showOrderForm = false
+    state.editingOrder = null
     pendingPhotos = []
     render()
   } catch (err) {
     errBox.innerHTML = `<div class="bg-clay/10 border border-clay/30 text-clay rounded-xl px-4 py-3 text-sm font-ui">فشل حفظ الطلب: ${esc(err.message)}</div>`
     submitBtn.disabled = false
-    submitBtn.textContent = 'حفظ الطلب'
+    submitBtn.textContent = state.editingOrder ? 'حفظ التعديلات' : 'حفظ الطلب'
   }
 }
 

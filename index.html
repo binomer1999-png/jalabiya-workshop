@@ -152,6 +152,11 @@ function waPhone(p, cc) {
 }
 const remaining = (o) => Math.max(0, Number(o.price||0) - Number(o.deposit||0))
 const isOverdue = (o) => o.delivery_date && !o.is_cancelled && o.status !== 'delivered' && new Date(o.delivery_date + 'T23:59:59') < new Date()
+const ASSIGN_COLS = { workshop:'assigned_workshop', buttons:'assigned_buttons', delivery:'assigned_delivery' }
+const ASSIGN_LABELS = { workshop:'عامل المشغل (الخياطة)', buttons:'عامل الأزرار', delivery:'عامل التسليم' }
+const profileName = (id) => { const p = state.profiles.find(x => x.id === id); return p ? p.full_name : null }
+const visibleToMe = (o) => { const r = state.profile && state.profile.role; const c = ASSIGN_COLS[r]; return !c || !o[c] || o[c] === state.profile.id }
+const assigneeLine = (o) => Object.keys(ASSIGN_COLS).map(r => o[ASSIGN_COLS[r]] && profileName(o[ASSIGN_COLS[r]]) ? ASSIGN_LABELS[r] + ': ' + profileName(o[ASSIGN_COLS[r]]) : '').filter(Boolean)
 const canManage = () => state.profile && (state.profile.role === 'shop' || state.profile.role === 'admin')
 function waLink(o, cc) {
   const msg = o.status === 'ready_for_pickup'
@@ -237,7 +242,7 @@ async function loadProfileAndData() {
   const { data } = await supabase.from('profiles').select('*').eq('id', state.session.user.id).single()
   state.profile = data
   await Promise.all([loadOrders(), loadNotifications()])
-  if (state.profile && state.profile.role === 'admin') await loadProfiles()
+  if (state.profile && (state.profile.role === 'admin' || state.profile.role === 'shop')) await loadProfiles()
   subscribeRealtime()
 }
 
@@ -371,7 +376,7 @@ function renderNotifPanel() {
 
 function renderDashboardBody(role) {
   const viewStatuses = DEPT_VIEW[role] || STATUS_ORDER
-  let list = state.orders.filter(o => viewStatuses.includes(o.status) && (canManage() || !o.is_cancelled))
+  let list = state.orders.filter(o => viewStatuses.includes(o.status) && (canManage() || !o.is_cancelled) && visibleToMe(o))
   if (role !== 'shop' && role !== 'admin') {
     list = [...list].sort((a,b) => new Date(a.created_at) - new Date(b.created_at))
   }
@@ -467,6 +472,7 @@ function renderOrderCard(o, role) {
         ${o.is_cancelled ? '<span class="text-clay font-bold">⛔ ملغي</span>' : ''}
       </div>
     </button>
+    ${canManage() && assigneeLine(o).length ? `<div class="mt-2 text-xs text-ink-400 font-ui">👷 ${assigneeLine(o).map(esc).join(' · ')}</div>` : ''}
     <div class="mt-4">${renderThread(o.status, true)}</div>
     ${actions ? `<div class="mt-4 flex flex-wrap gap-2 pt-3 border-t border-sand-200">${actions}</div>` : ''}
   </div>`
@@ -552,6 +558,12 @@ function renderOrderForm() {
           <div><label class="label-field">تاريخ التسليم</label><input type="date" class="input-field" id="f-date" /></div>
           <div><label class="label-field">السعر (ج.س)</label><input type="number" min="0" step="0.01" class="input-field" id="f-price" placeholder="0.00" /></div>
           <div><label class="label-field">العربون (ج.س)</label><input type="number" min="0" step="0.01" class="input-field" id="f-deposit" placeholder="0.00" /></div>
+        </div>
+        <div>
+          <label class="label-field">يروح لأي عامل؟ (اختياري: لو ما اخترت، كل عمال القسم بشوفوه)</label>
+          <div class="grid sm:grid-cols-3 gap-3">
+            ${Object.keys(ASSIGN_COLS).map(r => `<div><span class="text-xs text-ink-400 font-ui">${ASSIGN_LABELS[r]}</span><select class="input-field" data-assign="${r}"><option value="">أي عامل في القسم</option>${state.profiles.filter(p => p.role === r && p.is_active).map(p => `<option value="${p.id}">${esc(p.full_name)}</option>`).join('')}</select></div>`).join('')}
+          </div>
         </div>
         <div>
           <label class="label-field">المقاسات</label>
@@ -733,6 +745,7 @@ function attachShellEvents() {
       const set = (id, v) => { document.getElementById(id).value = v == null ? '' : v }
       set('f-name', eo.customer_name); set('f-phone', eo.customer_phone); set('f-fabric', eo.fabric_type)
       set('f-date', eo.delivery_date); set('f-price', eo.price); set('f-deposit', eo.deposit); set('f-notes', eo.design_notes)
+      document.querySelectorAll('[data-assign]').forEach(sel => { sel.value = eo[ASSIGN_COLS[sel.dataset.assign]] || '' })
       document.querySelectorAll('[data-measure]').forEach(inp => { inp.value = (eo.measurements || {})[inp.dataset.measure] || '' })
       renderPhotoPreview()
     }
@@ -827,6 +840,7 @@ async function handleCreateOrder(e) {
       deposit: document.getElementById('f-deposit').value ? Number(document.getElementById('f-deposit').value) : 0,
       photos: pendingPhotos,
     }
+    document.querySelectorAll('[data-assign]').forEach(sel => { fields[ASSIGN_COLS[sel.dataset.assign]] = sel.value || null })
     if (fields.deposit > fields.price) throw new Error('العربون أكبر من السعر')
     let orderErr
     if (state.editingOrder) {
